@@ -1,0 +1,190 @@
+controller:
+  kind: Deployment
+  name: controller
+  image:
+    registry: registry.k8s.io
+    image: ingress-nginx/controller
+    pullPolicy: Always
+
+  podAnnotations:
+    ad.datadoghq.com/controller.checks: |
+      {
+        "nginx_ingress_controller": {
+          "init_config": {},
+          "instances": [
+            {
+              "nginx_status_url": "http://%%host%%:18080/nginx_status",
+              "prometheus_url": "http://%%host%%:10254/metrics"
+            }
+          ]
+        }
+      }
+
+  config:
+    enable-access-log-for-default-backend: "true"
+    otel-service-name: "ingress-nginx"
+    use-forwarded-headers: "true"
+    enable-opentracing: "false"
+    enable-opentelemetry: "true"
+    otlp-collector-host: collector.opentelemetry
+    otlp-collector-port: 4317
+    opentelemetry-trust-incoming-span: "true"
+    otel-max-export-batch-size: 512
+    otel-max-queuesize: 4096
+    otel-sampler-parent-based: "false"
+    otel-sampler-ratio: "1.0"
+    otel-sampler: "AlwaysOn"
+    otel-schedule-delay-millis: 100
+    log-format-escape-json: "true"
+    log-format-upstream:
+      '{"timestamp": "$time_iso8601", "requestID": "$req_id", "proxyUpstreamName":
+      "$proxy_upstream_name", "proxyAlternativeUpstreamName": "$proxy_alternative_upstream_name","upstreamStatus":
+      "$upstream_status", "upstreamAddr": "$upstream_addr", "dd.trace_id": "$upstream_http_traceId", "dd.span_id": "$upstream_http_spanId",
+      "trace_id": "$upstream_http_traceId", "span_id": "$upstream_http_spanId",
+      "httpRequest":{"requestMethod":"$request_method", "requestUrl": "$host$request_uri", "status": $status,"requestSize":
+      "$request_length", "responseSize": "$upstream_response_length", "userAgent": "$http_user_agent",
+      "remoteIp": "$remote_addr", "referer": "$http_referer", "latency": "$upstream_response_time s",
+      "protocol":"$server_protocol"}}'
+    http-snippet: |
+      server {
+        listen 18080;
+
+        location /nginx_status {
+          allow all;
+          stub_status on;
+        }
+
+        location / {
+          return 404;
+        }      
+      }
+
+  resources:
+    limits:
+      cpu: 1
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 256Mi
+
+  replicaCount: 1
+  minAvailable: 1
+
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 2
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 180
+      scaleUp:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Pods
+            value: 2
+            periodSeconds: 60
+
+  autoscalingTemplate: []
+
+  service:
+    enabled: true
+    enableHttp: true
+    enableHttps: true
+
+    ports:
+      http: 80
+      https: 443
+
+    targetPorts:
+      http: http
+      https: https
+
+    type: LoadBalancer
+    loadBalancerSourceRanges:
+      - xxx.xxx.xxx.xxx/24
+
+    externalTrafficPolicy: Local
+
+    external:
+      enabled: true
+
+    internal:
+      enabled: true
+      annotations:
+        networking.gke.io/load-balancer-type: Internal
+      loadBalancerSourceRanges:
+        - 10.0.0.0/8
+
+  opentelemetry:
+    enabled: true
+
+  admissionWebhooks:
+    port: 10250
+    certManager:
+      enabled: true
+
+  metrics:
+    port: 10254
+    enabled: true
+
+    service:
+      clusterIP: None
+
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: monitoring
+
+    prometheusRule:
+      enabled: true
+      additionalLabels:
+        release: monitoring
+      rules:
+        # These are just examples rules, please adapt them to your needs
+        - alert: NGINXConfigFailed
+          expr: count(nginx_ingress_controller_config_last_reload_successful == 0) > 0
+          for: 1s
+          labels:
+            severity: critical
+          annotations:
+            description: bad ingress config - nginx config test failed
+            summary: uninstall the latest ingress changes to allow config reloads to resume
+        - alert: NGINXCertificateExpiry
+          expr: (avg(nginx_ingress_controller_ssl_expire_time_seconds) by (host) - time()) < 604800
+          for: 1s
+          labels:
+            severity: critical
+          annotations:
+            description: ssl certificate(s) will expire in less then a week
+            summary: renew expiring certificates to avoid downtime
+        - alert: NGINXTooMany500s
+          expr: 100 * ( sum( nginx_ingress_controller_requests{status=~"5.+"} ) / sum(nginx_ingress_controller_requests) ) > 5
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            description: Too many 5XXs
+            summary: More than 5% of all requests returned 5XX, this requires your attention
+        - alert: NGINXTooMany400s
+          expr: 100 * ( sum( nginx_ingress_controller_requests{status=~"4.+"} ) / sum(nginx_ingress_controller_requests) ) > 5
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            description: Too many 4XXs
+            summary: More than 5% of all requests returned 4XX, this requires your attention
+
+rbac:
+  create: true
+  scope: false
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: true

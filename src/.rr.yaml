@@ -1,0 +1,27 @@
+version: "2.7"
+
+http:
+  address: "0.0.0.0:8080"
+  access_logs: false
+  middleware: [gzip, otel] # otel middleware should be applied first in the line (from right to left). Middleware order is: `request` --> `otel` -> `gzip` -> `http-plugin` -> `PHP worker`.
+  pool:
+    num_workers: 1
+  otel:
+    insecure: true
+    compress: false
+    client: http
+    exporter: otlp
+    service_name: rr # your app name
+    service_version: 1.0.0 # your app version
+    endpoint: collector.opentelemetry:4318
+
+metrics:
+  address: 0.0.0.0:2112
+
+server:
+  command: "php index.php"
+
+logs:
+  mode: production
+  level: info
+  encoding: json
